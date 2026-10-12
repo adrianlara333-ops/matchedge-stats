@@ -8,6 +8,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     ApplicationBuilder,
     CallbackQueryHandler,
+    CommandHandler,
     ContextTypes,
     MessageHandler,
     filters,
@@ -18,7 +19,7 @@ TOKEN = "8343705082:AAFiV6ZTR4y7WiA1uABk5DgnW1uiCuq2JpM"
 CANAL_ID = -1004419997961
 ADMIN_ID = 1582610498
 
-# === SERVIDOR WEB PARA EVITAR EL TIMEOUT EN RENDER ===
+# === SERVIDOR WEB PARA RENDER ===
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -26,7 +27,6 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"MatchEdge Bot is running!")
 
     def log_message(self, format, *args):
-        # Silenciar logs continuos del servidor web
         pass
 
 def run_web_server():
@@ -50,21 +50,25 @@ cursor.execute(
 )
 conn.commit()
 
-# === CAPTURA DE PICKS DESDE EL CANAL ===
+# === COMANDO START ===
+async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("👋 ¡Bot conectado y listo para registrar tus picks de MatchEdge!")
+
+# === CAPTURA DE PICKS ===
 async def capturar_pick_canal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.channel_post or update.channel_post.chat.id != CANAL_ID:
+    post = update.channel_post or update.edited_channel_post
+    if not post or post.chat.id != CANAL_ID:
         return
 
-    texto = update.channel_post.text or update.channel_post.caption or ""
+    texto = post.text or post.caption or ""
 
-    if "Odds:" in texto and "Pick:" in texto:
-        evento_match = re.search(r"⚽\s*(.+)", texto) or re.search(
-            r"([A-Za-z0-9\s]+vs[A-Za-z0-9\s]+)", texto
-        )
-        pick_match = re.search(r"Pick:\s*(.+)", texto)
+    # Verifica si contiene las palabras clave aunque lleven emojis delante
+    if "Pick:" in texto and "Odds:" in texto:
+        evento_match = re.search(r"(?:⚽|\b)([A-Za-z0-9\s]+vs[A-Za-z0-9\s]+)", texto, re.IGNORECASE)
+        pick_match = re.search(r"Pick:\s*([^\n\r]+)", texto)
         cuota_match = re.search(r"Odds:\s*([\d\.]+)", texto)
 
-        evento = evento_match.group(1).strip() if evento_match else "Evento"
+        evento = evento_match.group(1).strip() if evento_match else "Evento MatchEdge"
         pick = pick_match.group(1).strip() if pick_match else "Pick"
         cuota = float(cuota_match.group(1).strip()) if cuota_match else 1.00
         fecha = datetime.now().strftime("%Y-%m-%d")
@@ -104,9 +108,7 @@ async def boton_resultado(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     accion, pick_id = query.data.split("_")
-    estado = (
-        "GANADA" if accion == "win" else "PERDIDA" if accion == "loss" else "NULA"
-    )
+    estado = "GANADA" if accion == "win" else "PERDIDA" if accion == "loss" else "NULA"
 
     cursor.execute("UPDATE picks SET estado = ? WHERE id = ?", (estado, pick_id))
     conn.commit()
@@ -119,12 +121,11 @@ async def boton_resultado(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # === INICIALIZACIÓN ===
 if __name__ == "__main__":
-    # Inicia el micro servidor web para que Render detecte el puerto
     server_thread = threading.Thread(target=run_web_server, daemon=True)
     server_thread.start()
 
-    # Inicia el bot de Telegram
     app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(MessageHandler(filters.ChatType.CHANNEL, capturar_pick_canal))
     app.add_handler(CallbackQueryHandler(boton_resultado))
     print("MatchEdge Bot iniciado...")
