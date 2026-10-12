@@ -129,4 +129,3 @@ if __name__ == "__main__":
     app.add_handler(CallbackQueryHandler(boton_resultado))
     print("MatchEdge Bot iniciado...")
     app.run_polling()
-
