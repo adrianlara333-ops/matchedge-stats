@@ -52,23 +52,18 @@ cursor.execute(
 conn.commit()
 
 def procesar_texto_pick(texto: str):
-    """Extrae datos sin importar emojis o variaciones de espaciado."""
     if not ("pick" in texto.lower() and "odds" in texto.lower()):
         return None
 
-    # Busca línea con 'vs' o balón
     evento_match = re.search(r"(?:⚽|\b)([A-Za-z0-9\s\.\-]+vs[A-Za-z0-9\s\.\-]+)", texto, re.IGNORECASE)
-    # Busca pick tras 'Pick:'
     pick_match = re.search(r"Pick:\s*([^\n\r]+)", texto, re.IGNORECASE)
-    # Busca número decimal o entero tras 'Odds:'
     cuota_match = re.search(r"Odds:\s*([\d\.]+)", texto, re.IGNORECASE)
-    # Busca stake si viene indicado
     stake_match = re.search(r"Stake:\s*([\d\.\/]+)", texto, re.IGNORECASE)
 
     evento = evento_match.group(1).strip() if evento_match else "Evento MatchEdge"
     pick = pick_match.group(1).strip() if pick_match else "Pronóstico"
     cuota = float(cuota_match.group(1).strip()) if cuota_match else 1.00
-    
+
     stake_val = 1.0
     if stake_match:
         st_raw = stake_match.group(1).split("/")[0].strip()
@@ -85,7 +80,8 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "👋 *MatchEdge Stats Bot conectado.*\n\n"
         "Comandos disponibles:\n"
         "• `/stats` - Ver balance, yield y resumen histórico.\n"
-        "• `/add <texto>` - Registrar un pick manualmente o pasado.\n\n"
+        "• `/add <texto>` - Registrar un pick individual.\n"
+        "• `/import <bloques>` - Importar varios picks juntos separados por `---`.\n\n"
         "Cualquier pick publicado en el canal oficial se detectará automáticamente.",
         parse_mode="Markdown",
     )
@@ -134,7 +130,7 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(msg, parse_mode="Markdown")
 
-# === REGISTRO MANUAL / PASADO ===
+# === REGISTRO MANUAL INDIVIDUAL ===
 async def add_manual_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = update.message.text.replace("/add", "").strip()
     datos = procesar_texto_pick(texto)
@@ -175,13 +171,44 @@ async def add_manual_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown",
     )
 
+# === REGISTRO MASIVO (/import) ===
+async def import_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    texto = update.message.text.replace("/import", "").strip()
+    bloques = [b.strip() for b in texto.split("---") if b.strip()]
+
+    fecha = datetime.now().strftime("%Y-%m-%d")
+    contador = 0
+
+    for b in bloques:
+        evento_m = re.search(r"(?:⚽|\b)([A-Za-z0-9\s\.\-\&\(\)]+vs[A-Za-z0-9\s\.\-\&\(\)]+|[A-Za-z0-9\s\.\-]+)", b)
+        pick_m = re.search(r"Pick:\s*([^\n\r]+)", b, re.IGNORECASE)
+        cuota_m = re.search(r"Odds:\s*([\d\.]+)", b, re.IGNORECASE)
+        estado_m = re.search(r"Status:\s*(GANADA|PERDIDA|NULA|PENDIENTE)", b, re.IGNORECASE)
+
+        if pick_m and cuota_m:
+            evento = evento_m.group(1).strip() if evento_m else "Pick Histórico"
+            pick = pick_m.group(1).strip()
+            cuota = float(cuota_m.group(1).strip())
+            estado = estado_m.group(1).upper() if estado_m else "GANADA"
+
+            cursor.execute(
+                "INSERT INTO picks (msg_id, fecha, evento, pick, cuota, stake, estado) VALUES (NULL, ?, ?, ?, ?, 1.0, ?)",
+                (fecha, evento, pick, cuota, estado),
+            )
+            contador += 1
+
+    conn.commit()
+    await update.message.reply_text(
+        f"✅ Se han importado {contador} picks históricos correctamente.\nUsa `/stats` para consultar el balance acumulado.",
+        parse_mode="Markdown",
+    )
+
 # === CAPTURA EN TIEMPO REAL DESDE EL CANAL ===
 async def capturar_canal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     post = update.channel_post or update.edited_channel_post
     if not post or post.chat.id != CANAL_ID:
         return
 
-    # Evitar duplicados por edición o retransmisión
     cursor.execute("SELECT id FROM picks WHERE msg_id = ?", (post.message_id,))
     if cursor.fetchone():
         return
@@ -249,6 +276,7 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("stats", stats_cmd))
     app.add_handler(CommandHandler("add", add_manual_cmd))
+    app.add_handler(CommandHandler("import", import_cmd))
     app.add_handler(MessageHandler(filters.ChatType.CHANNEL, capturar_canal))
     app.add_handler(CallbackQueryHandler(boton_resultado))
 
